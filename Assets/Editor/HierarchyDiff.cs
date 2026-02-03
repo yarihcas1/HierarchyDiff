@@ -113,7 +113,24 @@ public class HierarchyDiff : EditorWindow
             EditorGUILayout.HelpBox("比較するオブジェクトA, Bを両方指定してください", MessageType.Info);
             return;
         }
-        
+
+        // グローバル一括コピーボタン
+        EditorGUILayout.BeginHorizontal();
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("全て A→B", GUILayout.Width(100)))
+        {
+            var differences = CollectAllDifferences();
+            BulkCopyProperties(differences, true);
+        }
+        if (GUILayout.Button("全て B→A", GUILayout.Width(100)))
+        {
+            var differences = CollectAllDifferences();
+            BulkCopyProperties(differences, false);
+        }
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.Space();
+
         // Comparison display
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
         CompareHierarchy(objectA.transform, objectB.transform, "");
@@ -159,13 +176,28 @@ public class HierarchyDiff : EditorWindow
         
         // Hierarchy node header
         EditorGUILayout.BeginHorizontal();
-        foldoutStates[currentPath] = EditorGUILayout.Foldout(foldoutStates[currentPath], transformA.name, true);
-        
+        bool shouldExpandHierarchy = expandAll || foldoutStates[currentPath];
+        foldoutStates[currentPath] = EditorGUILayout.Foldout(shouldExpandHierarchy, transformA.name, true);
+
         if (transformA.name != transformB.name)
         {
             EditorGUILayout.LabelField($"⚠ 名前不一致: {transformB.name}", EditorStyles.miniLabel);
         }
-        
+
+        GUILayout.FlexibleSpace();
+
+        // 階層ノード用一括コピーボタン
+        if (GUILayout.Button("A→B", GUILayout.Width(45)))
+        {
+            var differences = CollectNodeDifferences(transformA.gameObject, transformB.gameObject);
+            BulkCopyProperties(differences, true);
+        }
+        if (GUILayout.Button("B→A", GUILayout.Width(45)))
+        {
+            var differences = CollectNodeDifferences(transformA.gameObject, transformB.gameObject);
+            BulkCopyProperties(differences, false);
+        }
+
         EditorGUILayout.EndHorizontal();
         
         if (foldoutStates[currentPath])
@@ -230,31 +262,61 @@ public class HierarchyDiff : EditorWindow
         // Check if names are different
         if (transformA.name != transformB.name)
             return true;
-        
+
         // Check components for differences
         Component[] componentsA = transformA.gameObject.GetComponents<Component>();
         Component[] componentsB = transformB.gameObject.GetComponents<Component>();
-        
-        foreach (var componentA in componentsA)
+
+        // 同じ型のコンポーネントをインデックスでマッチングするためにグループ化
+        var componentsByTypeA = new Dictionary<System.Type, List<Component>>();
+        var componentsByTypeB = new Dictionary<System.Type, List<Component>>();
+
+        foreach (var comp in componentsA)
         {
-            if (componentA == null) continue;
-            
-            string componentType = componentA.GetType().Name;
-            
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeA.ContainsKey(type))
+                componentsByTypeA[type] = new List<Component>();
+            componentsByTypeA[type].Add(comp);
+        }
+
+        foreach (var comp in componentsB)
+        {
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeB.ContainsKey(type))
+                componentsByTypeB[type] = new List<Component>();
+            componentsByTypeB[type].Add(comp);
+        }
+
+        foreach (var kvp in componentsByTypeA)
+        {
+            System.Type componentTypeKey = kvp.Key;
+            List<Component> listA = kvp.Value;
+            string componentTypeName = componentTypeKey.Name;
+
             // Apply component filter
-            if (!string.IsNullOrEmpty(componentFilter) && 
-                !componentType.ToLower().Contains(componentFilter.ToLower()))
+            if (!string.IsNullOrEmpty(componentFilter) &&
+                !componentTypeName.ToLower().Contains(componentFilter.ToLower()))
                 continue;
-            
-            Component componentB = componentsB.FirstOrDefault(c => c != null && c.GetType() == componentA.GetType());
-            
-            if (componentB == null)
-                return true; // Component missing in B
-            
-            // Check if this component has differences
-            int differenceCount = CountDifferences(componentA, componentB);
-            if (differenceCount > 0)
+
+            // Bに同じ型のコンポーネントがない場合は差分あり
+            if (!componentsByTypeB.ContainsKey(componentTypeKey))
                 return true;
+
+            List<Component> listB = componentsByTypeB[componentTypeKey];
+
+            // コンポーネント数が異なる場合は差分あり
+            if (listA.Count != listB.Count)
+                return true;
+
+            // インデックスでマッチングして比較
+            for (int i = 0; i < listA.Count; i++)
+            {
+                int differenceCount = CountDifferences(listA[i], listB[i]);
+                if (differenceCount > 0)
+                    return true;
+            }
         }
         
         // Check children for differences
@@ -304,94 +366,149 @@ public class HierarchyDiff : EditorWindow
     {
         Component[] componentsA = objA.GetComponents<Component>();
         Component[] componentsB = objB.GetComponents<Component>();
-        
+
         if (!componentFoldouts.ContainsKey(path))
             componentFoldouts[path] = new Dictionary<string, bool>();
-        
-        foreach (var componentA in componentsA)
+
+        // 同じ型のコンポーネントをインデックスでマッチングするためにグループ化
+        var componentsByTypeA = new Dictionary<System.Type, List<Component>>();
+        var componentsByTypeB = new Dictionary<System.Type, List<Component>>();
+
+        foreach (var comp in componentsA)
         {
-            if (componentA == null) continue;
-            
-            string componentType = componentA.GetType().Name;
-            
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeA.ContainsKey(type))
+                componentsByTypeA[type] = new List<Component>();
+            componentsByTypeA[type].Add(comp);
+        }
+
+        foreach (var comp in componentsB)
+        {
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeB.ContainsKey(type))
+                componentsByTypeB[type] = new List<Component>();
+            componentsByTypeB[type].Add(comp);
+        }
+
+        foreach (var kvp in componentsByTypeA)
+        {
+            System.Type componentTypeKey = kvp.Key;
+            List<Component> listA = kvp.Value;
+            string componentTypeName = componentTypeKey.Name;
+
             // Apply component filter
-            if (!string.IsNullOrEmpty(componentFilter) && 
-                !componentType.ToLower().Contains(componentFilter.ToLower()))
+            if (!string.IsNullOrEmpty(componentFilter) &&
+                !componentTypeName.ToLower().Contains(componentFilter.ToLower()))
                 continue;
-            
-            // Find matching component in B
-            Component componentB = componentsB.FirstOrDefault(c => c != null && c.GetType() == componentA.GetType());
-            
-            if (componentB == null)
+
+            // Bに同じ型のコンポーネントがあるか確認
+            if (!componentsByTypeB.ContainsKey(componentTypeKey))
             {
-                EditorGUILayout.HelpBox($"コンポーネント '{componentType}' がBに存在しません", MessageType.Warning);
+                EditorGUILayout.HelpBox($"コンポーネント '{componentTypeName}' がBに存在しません", MessageType.Warning);
                 continue;
             }
-            
-            string componentKey = path + "_" + componentType;
-            if (!componentFoldouts[path].ContainsKey(componentType))
-                componentFoldouts[path][componentType] = false;
-            
-            // Count differences
-            int differenceCount = CountDifferences(componentA, componentB);
-            
-            EditorGUILayout.BeginVertical("box");
-            
-            // Temporarily remove indent for the header row
-            int originalIndent = EditorGUI.indentLevel;
-            EditorGUI.indentLevel = 0;
-            
-            EditorGUILayout.BeginHorizontal();
-            
-            // Show difference indicator
-            if (differenceCount > 0)
+
+            List<Component> listB = componentsByTypeB[componentTypeKey];
+            int count = System.Math.Min(listA.Count, listB.Count);
+
+            // インデックスでマッチング
+            for (int i = 0; i < count; i++)
             {
-                GUIStyle iconStyle = new GUIStyle(EditorStyles.label);
-                iconStyle.normal.textColor = new Color(0.9f, 0.2f, 0.2f);
-                iconStyle.fontSize = 14;
-                iconStyle.fontStyle = FontStyle.Bold;
-                EditorGUILayout.LabelField("●", iconStyle, GUILayout.Width(15));
+                Component componentA = listA[i];
+                Component componentB = listB[i];
+
+                // 複数ある場合はインデックス付きの表示名を使用
+                string displayName = listA.Count > 1 ? $"{componentTypeName} [{i}]" : componentTypeName;
+                string componentKey = listA.Count > 1 ? $"{componentTypeName}_{i}" : componentTypeName;
+
+                if (!componentFoldouts[path].ContainsKey(componentKey))
+                    componentFoldouts[path][componentKey] = false;
+
+                // Count differences
+                int differenceCount = CountDifferences(componentA, componentB);
+
+                EditorGUILayout.BeginVertical("box");
+
+                // Temporarily remove indent for the header row
+                int originalIndent = EditorGUI.indentLevel;
+                EditorGUI.indentLevel = 0;
+
+                EditorGUILayout.BeginHorizontal();
+
+                // Show difference indicator
+                if (differenceCount > 0)
+                {
+                    GUIStyle iconStyle = new GUIStyle(EditorStyles.label);
+                    iconStyle.normal.textColor = new Color(0.9f, 0.2f, 0.2f);
+                    iconStyle.fontSize = 14;
+                    iconStyle.fontStyle = FontStyle.Bold;
+                    EditorGUILayout.LabelField("●", iconStyle, GUILayout.Width(15));
+                }
+                else
+                {
+                    GUIStyle iconStyle = new GUIStyle(EditorStyles.label);
+                    iconStyle.normal.textColor = new Color(0.4f, 0.7f, 0.4f);
+                    iconStyle.fontSize = 14;
+                    EditorGUILayout.LabelField("✓", iconStyle, GUILayout.Width(15));
+                }
+
+                // Add indent spacing manually
+                GUILayout.Space(originalIndent * 15);
+
+                bool shouldExpandComponent = expandAll || componentFoldouts[path][componentKey];
+                componentFoldouts[path][componentKey] = EditorGUILayout.Foldout(
+                    shouldExpandComponent,
+                    displayName,
+                    true
+                );
+
+                // Show difference count - always left aligned
+                if (differenceCount > 0)
+                {
+                    EditorGUILayout.LabelField($"({differenceCount}件の差分)", headerDifferenceStyle, GUILayout.Width(100));
+                }
+                else
+                {
+                    EditorGUILayout.LabelField("(同一)", identicalStyle, GUILayout.Width(60));
+                }
+
+                GUILayout.FlexibleSpace();
+
+                // コンポーネント用一括コピーボタン
+                if (GUILayout.Button("A→B", GUILayout.Width(45)))
+                {
+                    var differences = CollectComponentDifferences(componentA, componentB);
+                    BulkCopyProperties(differences, true);
+                }
+                if (GUILayout.Button("B→A", GUILayout.Width(45)))
+                {
+                    var differences = CollectComponentDifferences(componentA, componentB);
+                    BulkCopyProperties(differences, false);
+                }
+
+                EditorGUILayout.EndHorizontal();
+
+                // Restore indent
+                EditorGUI.indentLevel = originalIndent;
+
+                if (componentFoldouts[path][componentKey])
+                {
+                    EditorGUI.indentLevel++;
+                    CompareComponentProperties(componentA, componentB, path, componentKey);
+                    EditorGUI.indentLevel--;
+                }
+
+                EditorGUILayout.EndVertical();
             }
-            else
+
+            // Bにのみ存在する余分なコンポーネントを警告
+            if (listB.Count > listA.Count)
             {
-                GUIStyle iconStyle = new GUIStyle(EditorStyles.label);
-                iconStyle.normal.textColor = new Color(0.4f, 0.7f, 0.4f);
-                iconStyle.fontSize = 14;
-                EditorGUILayout.LabelField("✓", iconStyle, GUILayout.Width(15));
+                int extraCount = listB.Count - listA.Count;
+                EditorGUILayout.HelpBox($"コンポーネント '{componentTypeName}' がBに{extraCount}個多く存在します", MessageType.Warning);
             }
-            
-            // Add indent spacing manually
-            GUILayout.Space(originalIndent * 15);
-            
-            componentFoldouts[path][componentType] = EditorGUILayout.Foldout(
-                componentFoldouts[path][componentType], 
-                componentType, 
-                true
-            );
-            
-            // Show difference count - always left aligned
-            if (differenceCount > 0)
-            {
-                EditorGUILayout.LabelField($"({differenceCount}件の差分)", headerDifferenceStyle, GUILayout.Width(100));
-            }
-            else
-            {
-                EditorGUILayout.LabelField("(同一)", identicalStyle, GUILayout.Width(60));
-            }
-            
-            EditorGUILayout.EndHorizontal();
-            
-            // Restore indent
-            EditorGUI.indentLevel = originalIndent;
-            
-            if (componentFoldouts[path][componentType])
-            {
-                EditorGUI.indentLevel++;
-                CompareComponentProperties(componentA, componentB, path, componentType);
-                EditorGUI.indentLevel--;
-            }
-            
-            EditorGUILayout.EndVertical();
         }
     }
     
@@ -893,5 +1010,221 @@ public class HierarchyDiff : EditorWindow
         public SerializedProperty propA;
         public SerializedProperty propB;
         public bool areEqual;
+    }
+
+    // 一括コピー用の差分情報
+    private class PropertyDifference
+    {
+        public Component componentA;
+        public Component componentB;
+        public string propertyPath;
+    }
+
+    // 全体の差分を収集
+    private List<PropertyDifference> CollectAllDifferences()
+    {
+        var differences = new List<PropertyDifference>();
+        if (objectA == null || objectB == null) return differences;
+
+        CollectHierarchyDifferencesRecursive(objectA.transform, objectB.transform, differences);
+        return differences;
+    }
+
+    // 階層を再帰的に走査して差分を収集
+    private void CollectHierarchyDifferencesRecursive(Transform transformA, Transform transformB, List<PropertyDifference> differences)
+    {
+        // hideIdenticalHierarchiesの設定を考慮
+        if (hideIdenticalHierarchies && !HasDifferencesInHierarchy(transformA, transformB))
+            return;
+
+        // このノードのコンポーネント差分を収集
+        CollectNodeDifferences(transformA.gameObject, transformB.gameObject, differences);
+
+        // 子階層を再帰的に処理
+        Dictionary<string, Transform> childrenA = new Dictionary<string, Transform>();
+        Dictionary<string, Transform> childrenB = new Dictionary<string, Transform>();
+
+        for (int i = 0; i < transformA.childCount; i++)
+        {
+            Transform child = transformA.GetChild(i);
+            childrenA[child.name] = child;
+        }
+
+        for (int i = 0; i < transformB.childCount; i++)
+        {
+            Transform child = transformB.GetChild(i);
+            childrenB[child.name] = child;
+        }
+
+        foreach (var kvp in childrenA)
+        {
+            if (childrenB.ContainsKey(kvp.Key))
+            {
+                CollectHierarchyDifferencesRecursive(kvp.Value, childrenB[kvp.Key], differences);
+            }
+        }
+    }
+
+    // 単一階層ノードの差分を収集
+    private List<PropertyDifference> CollectNodeDifferences(GameObject objA, GameObject objB)
+    {
+        var differences = new List<PropertyDifference>();
+        CollectNodeDifferences(objA, objB, differences);
+        return differences;
+    }
+
+    private void CollectNodeDifferences(GameObject objA, GameObject objB, List<PropertyDifference> differences)
+    {
+        Component[] componentsA = objA.GetComponents<Component>();
+        Component[] componentsB = objB.GetComponents<Component>();
+
+        // 同じ型のコンポーネントをインデックスでマッチングするためにグループ化
+        var componentsByTypeA = new Dictionary<System.Type, List<Component>>();
+        var componentsByTypeB = new Dictionary<System.Type, List<Component>>();
+
+        foreach (var comp in componentsA)
+        {
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeA.ContainsKey(type))
+                componentsByTypeA[type] = new List<Component>();
+            componentsByTypeA[type].Add(comp);
+        }
+
+        foreach (var comp in componentsB)
+        {
+            if (comp == null) continue;
+            var type = comp.GetType();
+            if (!componentsByTypeB.ContainsKey(type))
+                componentsByTypeB[type] = new List<Component>();
+            componentsByTypeB[type].Add(comp);
+        }
+
+        foreach (var kvp in componentsByTypeA)
+        {
+            System.Type componentTypeKey = kvp.Key;
+            List<Component> listA = kvp.Value;
+            string componentTypeName = componentTypeKey.Name;
+
+            // コンポーネントフィルター適用
+            if (!string.IsNullOrEmpty(componentFilter) &&
+                !componentTypeName.ToLower().Contains(componentFilter.ToLower()))
+                continue;
+
+            // Bに同じ型のコンポーネントがない場合はスキップ
+            if (!componentsByTypeB.ContainsKey(componentTypeKey))
+                continue;
+
+            List<Component> listB = componentsByTypeB[componentTypeKey];
+            int count = System.Math.Min(listA.Count, listB.Count);
+
+            // インデックスでマッチング
+            for (int i = 0; i < count; i++)
+            {
+                CollectComponentDifferences(listA[i], listB[i], differences);
+            }
+        }
+    }
+
+    // 単一コンポーネントの差分を収集
+    private List<PropertyDifference> CollectComponentDifferences(Component componentA, Component componentB)
+    {
+        var differences = new List<PropertyDifference>();
+        CollectComponentDifferences(componentA, componentB, differences);
+        return differences;
+    }
+
+    private void CollectComponentDifferences(Component componentA, Component componentB, List<PropertyDifference> differences)
+    {
+        SerializedObject serializedA = new SerializedObject(componentA);
+        SerializedObject serializedB = new SerializedObject(componentB);
+
+        SerializedProperty propA = serializedA.GetIterator();
+        bool enterChildren = true;
+
+        while (propA.Next(enterChildren))
+        {
+            enterChildren = false;
+
+            if (propA.name == "m_Script") continue;
+
+            // プロパティフィルター適用
+            if (!string.IsNullOrEmpty(propertyFilter) &&
+                !propA.displayName.ToLower().Contains(propertyFilter.ToLower()) &&
+                !propA.name.ToLower().Contains(propertyFilter.ToLower()))
+                continue;
+
+            SerializedProperty propB = serializedB.FindProperty(propA.propertyPath);
+
+            if (propB != null)
+            {
+                bool areEqual = ArePropertiesEqual(propA, propB);
+
+                // 差分があるプロパティのみ収集
+                if (!areEqual)
+                {
+                    differences.Add(new PropertyDifference
+                    {
+                        componentA = componentA,
+                        componentB = componentB,
+                        propertyPath = propA.propertyPath
+                    });
+                }
+            }
+        }
+    }
+
+    // 一括コピー実行
+    private void BulkCopyProperties(List<PropertyDifference> differences, bool aToB)
+    {
+        if (differences.Count == 0) return;
+
+        string direction = aToB ? "A→B" : "B→A";
+        string message = $"{differences.Count}件の差分を{direction}にコピーしますか？";
+
+        if (!EditorUtility.DisplayDialog("一括コピー確認", message, "コピー", "キャンセル"))
+            return;
+
+        Undo.SetCurrentGroupName($"Bulk Copy Properties {direction}");
+        int undoGroup = Undo.GetCurrentGroup();
+
+        // コピー先のオブジェクトをUndo登録
+        var targetObjects = differences
+            .Select(d => aToB ? d.componentB : d.componentA)
+            .Distinct()
+            .Cast<Object>()
+            .ToArray();
+
+        foreach (var obj in targetObjects)
+        {
+            Undo.RecordObject(obj, $"Bulk Copy {direction}");
+        }
+
+        // 各差分をコピー
+        foreach (var diff in differences)
+        {
+            Component source = aToB ? diff.componentA : diff.componentB;
+            Component target = aToB ? diff.componentB : diff.componentA;
+
+            SerializedObject serializedSource = new SerializedObject(source);
+            SerializedObject serializedTarget = new SerializedObject(target);
+
+            SerializedProperty sourceProp = serializedSource.FindProperty(diff.propertyPath);
+            SerializedProperty targetProp = serializedTarget.FindProperty(diff.propertyPath);
+
+            if (sourceProp != null && targetProp != null)
+            {
+                CopyPropertyValueRecursive(sourceProp, targetProp, serializedTarget);
+                serializedTarget.ApplyModifiedProperties();
+            }
+        }
+
+        // 変更をマーク
+        foreach (var obj in targetObjects)
+        {
+            EditorUtility.SetDirty(obj);
+        }
+
+        Undo.CollapseUndoOperations(undoGroup);
     }
 }
