@@ -63,3 +63,15 @@ crashlytics-build.properties
 Assets/PackageMakerWindowData.asset*
 .idea
 .vscode
+
+# Unity per-user settings
+/[Uu]ser[Ss]ettings/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code local files
+CLAUDE.local.md
+.claude/settings.local.json

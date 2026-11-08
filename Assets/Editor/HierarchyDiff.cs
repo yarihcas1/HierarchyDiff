@@ -24,6 +24,10 @@ public class HierarchyDiff : EditorWindow
     
     private Dictionary<string, bool> foldoutStates = new Dictionary<string, bool>();
     private Dictionary<string, Dictionary<string, bool>> componentFoldouts = new Dictionary<string, Dictionary<string, bool>>();
+
+    // Phase 1 最適化: 再描画制限用
+    private double lastInteractionTime = 0;
+    private bool needsRepaint = false;
     
     [MenuItem("Tools/yarihcas1_lab/Hierarchy Diff")]
     public static void ShowWindow()
@@ -75,7 +79,6 @@ public class HierarchyDiff : EditorWindow
         propertyFilter = EditorGUILayout.TextField("プロパティ名フィルター", propertyFilter);
         
         EditorGUILayout.BeginHorizontal();
-        showIdenticalValues = EditorGUILayout.Toggle("同一値も表示", showIdenticalValues);
         ignoreObjectReferenceDifferences = EditorGUILayout.Toggle("参照の違いを無視", ignoreObjectReferenceDifferences);
         if (GUILayout.Button(expandAll ? "全て折りたたむ" : "全て展開"))
         {
@@ -457,22 +460,17 @@ public class HierarchyDiff : EditorWindow
                 // Add indent spacing manually
                 GUILayout.Space(originalIndent * 15);
 
+                // コンポーネント名 + 差分件数を1つのラベルとして表示
+                string foldoutLabel = differenceCount > 0
+                    ? $"{displayName} ({differenceCount}件の差分)"
+                    : $"{displayName} (同一)";
+
                 bool shouldExpandComponent = expandAll || componentFoldouts[path][componentKey];
                 componentFoldouts[path][componentKey] = EditorGUILayout.Foldout(
                     shouldExpandComponent,
-                    displayName,
+                    foldoutLabel,
                     true
                 );
-
-                // Show difference count - always left aligned
-                if (differenceCount > 0)
-                {
-                    EditorGUILayout.LabelField($"({differenceCount}件の差分)", headerDifferenceStyle, GUILayout.Width(100));
-                }
-                else
-                {
-                    EditorGUILayout.LabelField("(同一)", identicalStyle, GUILayout.Width(60));
-                }
 
                 GUILayout.FlexibleSpace();
 
@@ -1226,5 +1224,30 @@ public class HierarchyDiff : EditorWindow
         }
 
         Undo.CollapseUndoOperations(undoGroup);
+    }
+
+    // Phase 1 最適化: クリーンアップ
+    private void OnDisable()
+    {
+        if (foldoutStates != null)
+        {
+            foldoutStates.Clear();
+        }
+
+        if (componentFoldouts != null)
+        {
+            foreach (var dict in componentFoldouts.Values)
+            {
+                dict.Clear();
+            }
+            componentFoldouts.Clear();
+        }
+    }
+
+    private void OnDestroy()
+    {
+        OnDisable();
+        foldoutStates = null;
+        componentFoldouts = null;
     }
 }
